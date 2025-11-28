@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Fallout Chicago – Interactive Map</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background: #020c02;
+      color: #33ff66;
+      font-family: "Courier New", monospace;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+    }
+
+    .crt-frame {
+      position: relative;
+      width: 1200px;
+      height: 600px;
+      border: 2px solid #33ff66;
+      box-shadow: 0 0 25px rgba(0, 255, 0, 0.4);
+      overflow: hidden;
+      background: #000;
+    }
+
+    /* Fake scanlines / CRT */
+    .crt-frame::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      background: linear-gradient(
+        rgba(0, 0, 0, 0.3) 50%,
+        rgba(0, 0, 0, 0) 50%
+      );
+      background-size: 100% 2px;
+      mix-blend-mode: multiply;
+      opacity: 0.4;
+      z-index: 3;
+    }
+
+    #mapViewport {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      cursor: grab;
+    }
+
+    #mapInner {
+      position: absolute;
+      transform-origin: 0 0; /* top-left */
+      image-rendering: pixelated;
+    }
+
+    #mapInner img {
+      display: block;
+      width: 100%;
+      height: auto;
+      pointer-events: none; /* so dragging works on top */
+    }
+
+    .marker {
+      position: absolute;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: #33ff66;
+      box-shadow: 0 0 10px rgba(0, 255, 0, 0.9);
+      transform: translate(-50%, -50%);
+      cursor: pointer;
+      z-index: 2;
+    }
+
+    .marker::after {
+      content: "";
+      position: absolute;
+      inset: 3px;
+      border-radius: 50%;
+      background: #001800;
+    }
+
+    .marker-label {
+      position: absolute;
+      top: -22px;
+      left: 18px;
+      white-space: nowrap;
+      font-size: 11px;
+      background: rgba(0, 20, 0, 0.9);
+      padding: 2px 4px;
+      border-radius: 2px;
+      border: 1px solid #33ff66;
+      text-shadow: 0 0 3px rgba(0, 255, 0, 0.7);
+      pointer-events: none;
+    }
+
+    .hud {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      padding: 6px 8px;
+      font-size: 12px;
+      background: linear-gradient(to top, rgba(0, 10, 0, 0.9), transparent);
+      z-index: 4;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      pointer-events: none;
+    }
+
+    .hud-left,
+    .hud-right {
+      pointer-events: auto;
+    }
+
+    .btn {
+      border: 1px solid #33ff66;
+      background: transparent;
+      color: #33ff66;
+      font-family: inherit;
+      font-size: 11px;
+      padding: 2px 6px;
+      margin-right: 4px;
+      cursor: pointer;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      border-radius: 2px;
+    }
+
+    .btn:hover {
+      background: #33ff66;
+      color: #000;
+    }
+
+    #infoPanel {
+      min-width: 260px;
+      max-width: 360px;
+      border: 1px solid #33ff66;
+      padding: 4px 6px;
+      background: rgba(0, 8, 0, 0.9);
+      font-size: 11px;
+      white-space: pre-wrap;
+    }
+
+    #coords {
+      font-size: 11px;
+      opacity: 0.8;
+      margin-top: 4px;
+    }
+  </style>
+</head>
+<body>
+  <div class="crt-frame">
+    <div id="mapViewport">
+      <div id="mapInner">
+        <!-- Use your own image file here -->
+        <img src="chicago-map.png" alt="Chicago Region Map" id="mapImage" />
+        <!-- Markers are injected by JS -->
+      </div>
+    </div>
+
+    <div class="hud">
+      <div class="hud-left">
+        <button class="btn" id="zoomInBtn">ZOOM +</button>
+        <button class="btn" id="zoomOutBtn">ZOOM -</button>
+        <button class="btn" id="resetBtn">RESET</button>
+        <div id="coords">X: 0, Y: 0, ZOOM: 1.0</div>
+      </div>
+      <div class="hud-right">
+        <div id="infoPanel">
+MPA REGIONAL NAVIGATION ONLINE.
+CLICK A MARKER FOR INTEL.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ----- CONFIG -----
+    // Set these to your real image width/height in pixels
+    const IMAGE_WIDTH = 1743;   // approximate from your screenshot
+    const IMAGE_HEIGHT = 768;
+
+    // Marker list: x & y in image pixels
+    // Add/remove/edit these as you like
+    const MARKERS = [
+      {
+        id: "unionCity",
+        name: "UNION CITY",
+        x: 1350,
+        y: 260,
+        description:
+"UNION CITY\nPrimary seat of the Midwestern Provisional Authority.\nHigh security. Access by clearance only."
+      },
+      {
+        id: "crossroads",
+        name: "CROSSROADS STATION",
+        x: 1150,
+        y: 420,
+        description:
+"CROSSROADS STATION\nFrontier trading outpost on the western approach to Chicago.\nCaravans, mercenaries, smugglers."
+      },
+      {
+        id: "littleItaly",
+        name: "LITTLE ITALY",
+        x: 1320,
+        y: 310,
+        description:
+"LITTLE ITALY – THE CATACOMBS\nTerritory of Alessandro 'Old Capone' Martelli\nand the multi-family Outfit syndicate."
+      },
+      {
+        id: "raiderWest",
+        name: "RAIDER FRONTIER",
+        x: 900,
+        y: 400,
+        description:
+"UNIFIED RAIDER TERRITORY\nCoordinated strikes reported.\nTravel not recommended."
+      },
+      {
+        id: "mutantSouth",
+        name: "MUTANT BELT",
+        x: 1320,
+        y: 520,
+        description:
+"INDUSTRIAL MUTANT BELT\nHigh FEV contamination.\nMutant warbands active."
+      }
+    ];
+
+    // ----- STATE -----
+    const mapViewport = document.getElementById("mapViewport");
+    const mapInner = document.getElementById("mapInner");
+    const mapImage = document.getElementById("mapImage");
+    const infoPanel = document.getElementById("infoPanel");
+    const coordsEl = document.getElementById("coords");
+
+    const zoomInBtn = document.getElementById("zoomInBtn");
+    const zoomOutBtn = document.getElementById("zoomOutBtn");
+    const resetBtn = document.getElementById("resetBtn");
+
+    // pan/zoom state
+    let scale = 1;
+    let offsetX = 0;
+    let offsetY = 0;
+
+    let isDragging = false;
+    let dragStartX = 0;
+    let dragStartY = 0;
+    let dragOriginX = 0;
+    let dragOriginY = 0;
+
+    function updateTransform() {
+      mapInner.style.transform =
+        `translate(${offsetX}px, ${offsetY}px) scale(${scale})`;
+      coordsEl.textContent =
+        `X: ${Math.round(-offsetX / scale)}, ` +
+        `Y: ${Math.round(-offsetY / scale)}, ` +
+        `ZOOM: ${scale.toFixed(2)}`;
+    }
+
+    function clamp(val, min, max) {
+      return Math.max(min, Math.min(max, val));
+    }
+
+    function setScale(newScale, centerX, centerY) {
+      const oldScale = scale;
+      newScale = clamp(newScale, 0.5, 3.5);
+
+      if (newScale === oldScale) return;
+
+      // Zoom towards cursor point
+      const rect = mapViewport.getBoundingClientRect();
+      const cx = centerX - rect.left;
+      const cy = centerY - rect.top;
+
+      const wx = (cx - offsetX) / oldScale;
+      const wy = (cy - offsetY) / oldScale;
+
+      scale = newScale;
+      offsetX = cx - wx * scale;
+      offsetY = cy - wy * scale;
+      updateTransform();
+    }
+
+    // ----- MARKERS -----
+    function createMarkers() {
+      MARKERS.forEach(m => {
+        const el = document.createElement("div");
+        el.className = "marker";
+        el.dataset.id = m.id;
+
+        const label = document.createElement("div");
+        label.className = "marker-label";
+        label.textContent = m.name;
+        el.appendChild(label);
+
+        // Position in image coordinates; we convert in CSS transform space
+        const xRatio = m.x / IMAGE_WIDTH;
+        const yRatio = m.y / IMAGE_HEIGHT;
+        el.style.left = `${xRatio * 100}%`;
+        el.style.top = `${yRatio * 100}%`;
+
+        el.addEventListener("click", (e) => {
+          e.stopPropagation();
+          selectMarker(m);
+        });
+
+        mapInner.appendChild(el);
+      });
+    }
+
+    function selectMarker(marker) {
+      infoPanel.textContent = marker.description;
+    }
+
+    // ----- EVENTS -----
+    mapViewport.addEventListener("mousedown", (e) => {
+      isDragging = true;
+      mapViewport.style.cursor = "grabbing";
+      dragStartX = e.clientX;
+      dragStartY = e.clientY;
+      dragOriginX = offsetX;
+      dragOriginY = offsetY;
+    });
+
+    window.addEventListener("mouseup", () => {
+      isDragging = false;
+      mapViewport.style.cursor = "grab";
+    });
+
+    window.addEventListener("mousemove", (e) => {
+      if (!isDragging) return;
+      const dx = e.clientX - dragStartX;
+      const dy = e.clientY - dragStartY;
+      offsetX = dragOriginX + dx;
+      offsetY = dragOriginY + dy;
+      updateTransform();
+    });
+
+    mapViewport.addEventListener("wheel", (e) => {
+      e.preventDefault();
+      const delta = e.deltaY < 0 ? 0.1 : -0.1;
+      setScale(scale + delta, e.clientX, e.clientY);
+    }, { passive: false });
+
+    zoomInBtn.addEventListener("click", () => {
+      const rect = mapViewport.getBoundingClientRect();
+      setScale(scale + 0.25, rect.left + rect.width / 2, rect.top + rect.height / 2);
+    });
+
+    zoomOutBtn.addEventListener("click", () => {
+      const rect = mapViewport.getBoundingClientRect();
+      setScale(scale - 0.25, rect.left + rect.width / 2, rect.top + rect.height / 2);
+    });
+
+    resetBtn.addEventListener("click", () => {
+      scale = 1;
+      offsetX = 0;
+      offsetY = 0;
+      updateTransform();
+      infoPanel.textContent =
+"MPA REGIONAL NAVIGATION ONLINE.\nCLICK A MARKER FOR INTEL.";
+    });
+
+    // Click empty space to clear info
+    mapViewport.addEventListener("click", () => {
+      infoPanel.textContent =
+"NO ACTIVE SELECTION.\nUse markers or controls to navigate.";
+    });
+
+    // ----- INIT -----
+    createMarkers();
+    updateTransform();
+  </script>
+</body>
+</html>
